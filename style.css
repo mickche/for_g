@@ -1,0 +1,47 @@
+/* Контейнер меню по центру */
+#menu-box {
+    align: center middle;
+    width: auto;
+    height: auto;
+}
+
+#title {
+    text-align: center;
+    margin-bottom: 1;
+}
+
+/* Сітка 3х3 */
+#grid-box {
+    layout: grid;
+    grid-size: 3 3;
+    grid-gutter: 0 1;
+    width: 27; /* Розмір трьох кнопок по 7 + відступи */
+    height: 11; /* Розмір трьох кнопок по 3 + відступи */
+    margin-bottom: 1;
+}
+
+/* Круглі кнопки */
+.circle-btn {
+    width: 7;
+    height: 3;
+    border: round green;
+}
+
+QuizGridScreen {
+    align: center middle;
+}
+
+QuizGridScreen Grid {
+    layout: grid;
+    grid-size: 3 3;
+    grid-gutter: 1 2;
+    width: 41;
+    height: 11;
+    margin: 1 0;
+}
+
+.circle-btn {
+    width: 100%;
+    height: 100%;
+}
+

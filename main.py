@@ -1,8 +1,12 @@
+import json
+from pathlib import Path
 from textual import events, on
 from textual.app import App
-from textual.containers import Center, Container, Grid, Middle
+from textual.containers import Center, Container, Grid, Horizontal, Middle
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, RadioButton, RadioSet, Static
+
+STATS_FILE = Path("highscore.json")
 
 EASY_TASKS = {
     1: {
@@ -27,7 +31,7 @@ EASY_TASKS = {
         "correct": 2,
     },
     4: {
-        "question": "name = 'Анна'\nprint('{name}!')",
+        "question": "name = 'Анна'\nprint('{name}!')\nЩо треба поставити?",
         "options": ["f", "str", "format"],
         "correct": 0,
     },
@@ -76,7 +80,7 @@ NORMAL_TASKS = {
         "correct": 2,
     },
     3: {
-        "question": "answer = input('...:')\nprint('Ваша відповідь: {answer}')",
+        "question": "answer = input('...:')\nprint('Ваша відповідь: {answer}')\nЩо треба поставити?",
         "options": ["f", "str", "format"],
         "correct": 0,
     },
@@ -91,7 +95,7 @@ NORMAL_TASKS = {
         "correct": 0,
     },
     6: {
-        "question": "Завдання 6: Оберіть варіант із неправильним оголошенням списку:",
+        "question": "Завдання 6: Оберіть варіант із неправильним оголошенням структури даних:",
         "options": [
             "items = [1, 2, 'three']",
             "items = (1, 2, 3)",
@@ -180,6 +184,87 @@ HARD_TASKS = {
     },
 }
 
+TASKS_MAP = {
+    "btn_easy": EASY_TASKS,
+    "btn_normal": NORMAL_TASKS,
+    "btn_hard": HARD_TASKS,
+}
+
+NEXT_DIFFICULTY = {
+    "btn_easy": "btn_normal",
+    "btn_normal": "btn_hard",
+    "btn_hard": None,
+}
+
+
+class HighScoreScreen(Screen):
+    def compose(self):
+        high_score = self.app.high_score
+        high_correct = self.app.high_score_correct
+        high_total = self.app.high_score_total
+
+        score_text = (
+            f"[b]🏆 Ваші досягнення[/b]\n\n"
+            f"Рекорд успішності: [yellow]{high_score}%[/yellow]\n"
+            f"Правильних відповідей: [green]{high_correct}[/green] з {high_total}"
+        )
+
+        return [
+            Middle(
+                Center(
+                    Container(
+                        Static("Найкращий результат", id="title"),
+                        Static(score_text, id="stats-text"),
+                        Button("Назад", id="btn_back", variant="primary"),
+                        id="menu-box",
+                    )
+                )
+            ),
+            Footer(),
+        ]
+
+    @on(Button.Pressed, "#btn_back")
+    def action_go_back(self):
+        self.app.pop_screen()
+
+
+class ResultScreen(Screen):
+    def compose(self):
+        correct = self.app.correct_count
+        incorrect = self.app.incorrect_count
+        total = correct + incorrect
+        percentage = round((correct / total * 100)) if total > 0 else 0
+
+        self.app.update_high_score(percentage, correct, total)
+
+        stats_text = (
+            f"[b]Вітаємо! Ви пройшли всі рівні![/b]\n\n"
+            f"Правильних відповідей: [green]{correct}[/green]\n"
+            f"Неправильних відповідей: [red]{incorrect}[/red]\n"
+            f"Усього відповідей: {total}\n"
+            f"Успішність: [yellow]{percentage}%[/yellow]"
+        )
+
+        return [
+            Middle(
+                Center(
+                    Container(
+                        Static("Підсумки вікторини", id="title"),
+                        Static(stats_text, id="stats-text"),
+                        Button("Головне меню", id="btn_menu", variant="success"),
+                        id="menu-box",
+                    )
+                )
+            ),
+            Footer(),
+        ]
+
+    @on(Button.Pressed, "#btn_menu")
+    def action_go_main_menu(self):
+        self.app.reset_stats()
+        self.app.pop_screen_until(lambda screen: isinstance(screen, QuizApp))
+
+
 class SettingsScreen(Screen):
     def compose(self):
         return [
@@ -202,11 +287,7 @@ class SettingsScreen(Screen):
 
     @on(Button.Pressed, "#btn_theme")
     def action_toggle_theme(self):
-        self.app.theme = (
-            "textual-light"
-            if self.app.theme == "textual-dark"
-            else "textual-dark"
-        )
+        self.app.action_change_toggle()
 
 
 class DifficultyScreen(Screen):
@@ -245,6 +326,9 @@ class DifficultyScreen(Screen):
 
 
 class TaskRadioScreen(Screen):
+    def __init__(self):
+        super().__init__()
+        self.answered = False
     def compose(self):
         task = self.app.current_task
 
@@ -257,28 +341,57 @@ class TaskRadioScreen(Screen):
             Header(),
             Static(task["question"]),
             RadioSet(*[RadioButton(opt) for opt in options_list]),
-            Button("Відповісти", id="btn_submit", name="submit", variant="success"),
+            Button("Відповісти", id="btn_action", variant="success"),
             Button("Назад", id="btn_back", name="back", variant="error"),
             Footer(),
         ]
 
-    @on(Button.Pressed, "#btn_submit")
-    def check_answer(self):
-        radio_set = self.query_one(RadioSet)
+    @on(Button.Pressed, "#btn_action")
+    def handle_action_button(self, event: Button.Pressed):
+        action_btn = event.button
 
-        if radio_set.pressed_index is None:
-            self.notify("Будь ласка, оберіть варіант відповіді!", severity="warning")
-            return
+        if not self.answered:
+            radio_set = self.query_one(RadioSet)
 
-        if radio_set.pressed_index == self.app.current_task["correct"]:
-            self.notify("Правильно!", severity="information")
+            if radio_set.pressed_index is None:
+                self.notify("Будь ласка, оберіть варіант відповіді!", severity="warning")
+                return
+
+            self.answered = True
+
+            if radio_set.pressed_index == self.app.current_task["correct"]:
+                self.app.correct_count += 1
+                self.notify("Правильно!", severity="information")
+            else:
+                self.app.incorrect_count += 1
+                self.notify("Неправильно!", severity="error")
+
+            action_btn.label = "Наступний рівень"
+            action_btn.variant = "primary"
+
         else:
-            self.notify("Неправильно!", severity="error")
+            current_num = self.app.current_task_num
+            current_diff = self.app.current_difficulty
+
+            if current_num < 9:
+                next_num = current_num + 1
+                self.app.current_task_num = next_num
+                self.app.current_task = TASKS_MAP[current_diff][next_num]
+                self.app.switch_screen(TaskRadioScreen())
+            else:
+                next_diff = NEXT_DIFFICULTY.get(current_diff)
+                if next_diff:
+                    self.app.current_difficulty = next_diff
+                    self.app.current_task_num = 1
+                    self.app.current_task = TASKS_MAP[next_diff][1]
+                    self.notify("Вітаємо! Перехід на новий рівень складності!", severity="information")
+                    self.app.switch_screen(TaskRadioScreen())
+                else:
+                    self.app.switch_screen(ResultScreen())
 
     @on(Button.Pressed, "#btn_back")
     def action_go_back(self):
         self.app.pop_screen()
-
 
 class QuizGridScreen(Screen):
     def __init__(self, difficulty_id: str = "btn_easy"):
@@ -304,16 +417,11 @@ class QuizGridScreen(Screen):
     @on(Button.Pressed, ".circle-btn")
     def handle_task_selection(self, event: Button.Pressed):
         task_num = int(str(event.button.label))
-
-        tasks_map = {
-            "btn_easy": EASY_TASKS,
-            "btn_normal": NORMAL_TASKS,
-            "btn_hard": HARD_TASKS,
-        }
-
-        selected_tasks = tasks_map.get(self.difficulty_id, {})
+        selected_tasks = TASKS_MAP.get(self.difficulty_id, {})
 
         if task_num in selected_tasks:
+            self.app.current_difficulty = self.difficulty_id
+            self.app.current_task_num = task_num
             self.app.current_task = selected_tasks[task_num]
             self.app.push_screen(TaskRadioScreen())
         else:
@@ -322,29 +430,147 @@ class QuizGridScreen(Screen):
 
 class QuizApp(App):
     BINDINGS = [
-        ("q", "quit", "Вихід")
+        ("q", "quit", "Вихід"),
+        ("t", "change_toggle", "Змінити тему"),
     ]
+    
+    DEFAULT_CSS = """
+    #menu-layout {
+        width: 80;
+        height: auto;
+        align: center middle;
+    }
+
+    #menu-box {
+        width: 40;
+        height: auto;
+        border: heavy $primary;
+        padding: 1;
+        margin-right: 2;
+    }
+
+    #stats-box {
+        width: 35;
+        height: auto;
+        border: heavy $accent;
+        padding: 1;
+    }
+
+    #menu-box Button {
+        width: 100%;
+        margin-bottom: 1;
+    }
+
+    #title {
+        text-align: center;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    """
+
     CSS_PATH = "style.css"
+
+    def __init__(self):
+        super().__init__()
+        self.current_task = None
+        self.current_task_num = 1
+        self.current_difficulty = "btn_easy"
+        self.correct_count = 0
+        self.incorrect_count = 0
+        
+        self.high_score = 0
+        self.high_score_correct = 0
+        self.high_score_total = 0
+        
+        self.load_high_score()
+
+    def load_high_score(self):
+        if STATS_FILE.exists():
+            try:
+                with open(STATS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.high_score = data.get("high_score", 0)
+                    self.high_score_correct = data.get("high_score_correct", 0)
+                    self.high_score_total = data.get("high_score_total", 0)
+            except Exception:
+                pass
+
+    def save_high_score(self):
+        data = {
+            "high_score": self.high_score,
+            "high_score_correct": self.high_score_correct,
+            "high_score_total": self.high_score_total
+        }
+        try:
+            with open(STATS_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        except Exception:
+            pass
+
+    def reset_stats(self):
+        self.correct_count = 0
+        self.incorrect_count = 0
+        self.current_task_num = 1
+        self.current_difficulty = "btn_easy"
+
+    def update_high_score(self, percentage, correct, total):
+        if percentage > self.high_score:
+            self.high_score = percentage
+            self.high_score_correct = correct
+            self.high_score_total = total
+            self.save_high_score()
+            self.refresh_stats_display()
+
+    def refresh_stats_display(self):
+
+        try:
+            stats_widget = self.query_one("#side-stats-text", Static)
+            stats_widget.update(self.get_stats_text())
+        except Exception:
+            pass
+
+    def get_stats_text(self) -> str:
+        return (
+            f"[b]🏆 Статистика[/b]\n\n"
+            f"Рекорд:\n[yellow]{self.high_score}%[/yellow]\n\n"
+            f"Правильних:\n[green]{self.high_score_correct}[/green] з {self.high_score_total}"
+        )
 
     def compose(self):
         return [
             Middle(
                 Center(
-                    Container(
-                        Static("Головне меню", id="title"),
-                        Button("Старт", id="btn_start", variant="success"),
-                        Button("Меню", id="btn_about", variant="primary"),
-                        Button("Вихід", id="btn_exit", variant="error"),
-                        id="menu-box",
+                    Horizontal(
+                        Container(
+                            Static("Головне меню", id="title"),
+                            Button("Старт", id="btn_start", variant="success"),
+                            Button("Рекорд (High Score)", id="btn_highscore", variant="warning"),
+                            Button("Налаштування", id="btn_about", variant="primary"),
+                            Button("Вихід", id="btn_exit", variant="error"),
+                            id="menu-box",
+                        ),
+                        Container(
+                            Static(self.get_stats_text(), id="side-stats-text"),
+                            id="stats-box",
+                        ),
+                        id="menu-layout"
                     )
                 )
             ),
             Footer(),
         ]
 
+    def on_mount(self):
+        self.refresh_stats_display()
+
     @on(Button.Pressed, "#btn_start")
     def start_quiz(self):
+        self.reset_stats()
         self.push_screen(DifficultyScreen())
+
+    @on(Button.Pressed, "#btn_highscore")
+    def open_highscore_screen(self):
+        self.push_screen(HighScoreScreen())
 
     @on(Button.Pressed, "#btn_about")
     def open_about_screen(self):
@@ -353,6 +579,9 @@ class QuizApp(App):
     @on(Button.Pressed, "#btn_exit")
     def exit_app(self):
         self.exit()
+
+    def action_change_toggle(self):
+        self.theme = "textual-light" if self.theme == "textual-dark" else "textual-dark"
 
     def action_press_start(self):
         self.start_quiz()

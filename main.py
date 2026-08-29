@@ -262,7 +262,8 @@ class ResultScreen(Screen):
     @on(Button.Pressed, "#btn_menu")
     def action_go_main_menu(self):
         self.app.reset_stats()
-        self.app.pop_screen_until(lambda screen: isinstance(screen, QuizApp))
+        while len(self.app.screen_stack) > 1:
+            self.app.pop_screen()
 
 
 class SettingsScreen(Screen):
@@ -287,7 +288,7 @@ class SettingsScreen(Screen):
 
     @on(Button.Pressed, "#btn_theme")
     def action_toggle_theme(self):
-        self.app.action_change_toggle()
+        self.app.action_toggle_dark()
 
 
 class DifficultyScreen(Screen):
@@ -329,8 +330,20 @@ class TaskRadioScreen(Screen):
     def __init__(self):
         super().__init__()
         self.answered = False
+        self.last_was_correct = None
+
+    def get_live_stats_text(self) -> str:
+        return f"[green]Правильно: {self.app.correct_count}[/green]  |  [red]Неправильно: {self.app.incorrect_count}[/red]"
+
     def compose(self):
         task = self.app.current_task
+        diff = self.app.current_difficulty
+
+        diff_class = "task-easy"
+        if diff == "btn_normal":
+            diff_class = "task-normal"
+        elif diff == "btn_hard":
+            diff_class = "task-hard"
 
         if "code_lines" in task:
             options_list = [f"{i + 1}: {line}" for i, line in enumerate(task["code_lines"])]
@@ -339,12 +352,27 @@ class TaskRadioScreen(Screen):
 
         return [
             Header(),
-            Static(task["question"]),
-            RadioSet(*[RadioButton(opt) for opt in options_list]),
-            Button("Відповісти", id="btn_action", variant="success"),
-            Button("Назад", id="btn_back", name="back", variant="error"),
+            Static(self.get_live_stats_text(), id="live_stats"),
+            Static(task["question"], id="question_text", classes=diff_class),
+            RadioSet(
+                *[RadioButton(opt) for opt in options_list],
+                id="options_set",
+                classes=diff_class
+            ),
+            Horizontal(
+                Button("Відповісти", id="btn_action", variant="success"),
+                Button("Скинути (Reset)", id="btn_reset", variant="warning"),
+                Button("Назад", id="btn_back", name="back", variant="error"),
+                classes="action-buttons"
+            ),
             Footer(),
         ]
+
+    def update_live_stats_display(self):
+        try:
+            self.query_one("#live_stats", Static).update(self.get_live_stats_text())
+        except Exception:
+            pass
 
     @on(Button.Pressed, "#btn_action")
     def handle_action_button(self, event: Button.Pressed):
@@ -353,7 +381,7 @@ class TaskRadioScreen(Screen):
         if not self.answered:
             radio_set = self.query_one(RadioSet)
 
-            if radio_set.pressed_index is None:
+            if radio_set.pressed_button is None:
                 self.notify("Будь ласка, оберіть варіант відповіді!", severity="warning")
                 return
 
@@ -361,10 +389,14 @@ class TaskRadioScreen(Screen):
 
             if radio_set.pressed_index == self.app.current_task["correct"]:
                 self.app.correct_count += 1
+                self.last_was_correct = True
                 self.notify("Правильно!", severity="information")
             else:
                 self.app.incorrect_count += 1
+                self.last_was_correct = False
                 self.notify("Неправильно!", severity="error")
+
+            self.update_live_stats_display()
 
             action_btn.label = "Наступний рівень"
             action_btn.variant = "primary"
@@ -389,9 +421,35 @@ class TaskRadioScreen(Screen):
                 else:
                     self.app.switch_screen(ResultScreen())
 
+    @on(Button.Pressed, "#btn_reset")
+    def action_reset_task(self):
+        radio_set = self.query_one(RadioSet)
+        
+        if radio_set.pressed_button is not None:
+            radio_set.pressed_button.value = False
+
+        if self.answered:
+            if self.last_was_correct is True:
+                self.app.correct_count = max(0, self.app.correct_count - 1)
+            elif self.last_was_correct is False:
+                self.app.incorrect_count = max(0, self.app.incorrect_count - 1)
+            
+            self.answered = False
+            self.last_was_correct = None
+            
+            action_btn = self.query_one("#btn_action", Button)
+            action_btn.label = "Відповісти"
+            action_btn.variant = "success"
+            
+            self.update_live_stats_display()
+            self.notify("Вибір та зараховану відповідь скинуто!", severity="info")
+        else:
+            self.notify("Вибір скинуто!", severity="info")
+
     @on(Button.Pressed, "#btn_back")
     def action_go_back(self):
         self.app.pop_screen()
+
 
 class QuizGridScreen(Screen):
     def __init__(self, difficulty_id: str = "btn_easy"):
@@ -399,13 +457,23 @@ class QuizGridScreen(Screen):
         self.difficulty_id = difficulty_id
 
     def compose(self):
+        grid_class = "easy-grid"
+        if self.difficulty_id == "btn_normal":
+            grid_class = "normal-grid"
+        elif self.difficulty_id == "btn_hard":
+            grid_class = "hard-grid"
+
         return [
             Header(),
-            Static("Оберіть завдання"),
-            Grid(*[
-                Button(str(num), id=f"task_{num}", classes="circle-btn") 
-                for num in range(1, 10)
-            ]),
+            Static("Оберіть завдання", id="grid-title"),
+            Grid(
+                *[
+                    Button(str(num), id=f"task_{num}", classes="circle-btn") 
+                    for num in range(1, 10)
+                ],
+                id="task-grid",
+                classes=grid_class
+            ),
             Button("Назад", id="btn_back", name="back", variant="error"),
             Footer(),
         ]
@@ -431,29 +499,34 @@ class QuizGridScreen(Screen):
 class QuizApp(App):
     BINDINGS = [
         ("q", "quit", "Вихід"),
-        ("t", "change_toggle", "Змінити тему"),
+        ("t", "toggle_dark", "Змінити тему"),
     ]
     
     DEFAULT_CSS = """
     #menu-layout {
-        width: 80;
+        width: 60;
         height: auto;
         align: center middle;
     }
 
     #menu-box {
-        width: 40;
+        width: 30;
         height: auto;
         border: heavy $primary;
         padding: 1;
-        margin-right: 2;
+        margin-right: 1;
     }
 
     #stats-box {
-        width: 35;
+        width: 25;
         height: auto;
         border: heavy $accent;
         padding: 1;
+    }
+
+    Button {
+        min-height: 1;
+        height: 3;
     }
 
     #menu-box Button {
@@ -461,14 +534,84 @@ class QuizApp(App):
         margin-bottom: 1;
     }
 
-    #title {
+    #title, #grid-title {
         text-align: center;
         text-style: bold;
         margin-bottom: 1;
     }
-    """
 
-    CSS_PATH = "style.css"
+    #live_stats {
+        padding: 1;
+        text-style: bold;
+    }
+
+    #question_text {
+        margin: 1;
+        padding: 1;
+    }
+
+    #question_text.task-easy {
+        border: solid white;
+    }
+
+    #question_text.task-normal {
+        border: solid purple;
+    }
+
+    #question_text.task-hard {
+        border: solid blue;
+    }
+
+    .task-easy, .task-easy RadioButton {
+        color: white;
+    }
+
+    .task-normal, .task-normal RadioButton {
+        color: #b197fc;
+    }
+
+    .task-hard, .task-hard RadioButton {
+        color: #4dabf7;
+    }
+
+    .action-buttons {
+        height: auto;
+        margin-top: 1;
+    }
+
+    .action-buttons Button {
+        margin-right: 1;
+        height: 3;
+    }
+
+    #task-grid {
+        grid-size: 3 3;
+        grid-gutter: 1 1;
+        width: 26;
+        height: 11;
+        align: center middle;
+        margin-top: 1;
+        margin-bottom: 1;
+    }
+
+    .circle-btn {
+        width: 100%;
+        height: 3;
+        min-width: 3;
+    }
+
+    .easy-grid .circle-btn {
+        border: solid white;
+    }
+
+    .normal-grid .circle-btn {
+        border: solid purple;
+    }
+
+    .hard-grid .circle-btn {
+        border: solid blue;
+    }
+    """
 
     def __init__(self):
         super().__init__()
@@ -514,7 +657,10 @@ class QuizApp(App):
         self.current_difficulty = "btn_easy"
 
     def update_high_score(self, percentage, correct, total):
-        if percentage > self.high_score:
+        is_higher_percentage = percentage > self.high_score
+        is_same_percentage_more_correct = (percentage == self.high_score) and (correct > self.high_score_correct)
+
+        if is_higher_percentage or is_same_percentage_more_correct:
             self.high_score = percentage
             self.high_score_correct = correct
             self.high_score_total = total
@@ -522,7 +668,6 @@ class QuizApp(App):
             self.refresh_stats_display()
 
     def refresh_stats_display(self):
-
         try:
             stats_widget = self.query_one("#side-stats-text", Static)
             stats_widget.update(self.get_stats_text())
@@ -579,19 +724,6 @@ class QuizApp(App):
     @on(Button.Pressed, "#btn_exit")
     def exit_app(self):
         self.exit()
-
-    def action_change_toggle(self):
-        self.theme = "textual-light" if self.theme == "textual-dark" else "textual-dark"
-
-    def action_press_start(self):
-        self.start_quiz()
-
-    def action_press_about(self):
-        self.open_about_screen()
-
-    def on_key(self, event: events.Key) -> None:
-        if event.key == "enter" and isinstance(self.focused, Button):
-            self.focused.press()
 
 
 if __name__ == "__main__":

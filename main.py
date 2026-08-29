@@ -368,6 +368,24 @@ class TaskRadioScreen(Screen):
             Footer(),
         ]
 
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "enter":
+            if isinstance(self.focused, RadioButton):
+                radio_set = self.query_one(RadioSet)
+                radio_set.pressed_button = self.focused
+                btn_action = self.query_one("#btn_action", Button)
+                btn_action.press()
+                event.prevent_default()
+            elif isinstance(self.focused, Button):
+                self.focused.press()
+                event.prevent_default()
+        elif event.key in ("down", "right"):
+            self.app.action_focus_next()
+            event.prevent_default()
+        elif event.key in ("up", "left"):
+            self.app.action_focus_previous()
+            event.prevent_default()
+
     def update_live_stats_display(self):
         try:
             self.query_one("#live_stats", Static).update(self.get_live_stats_text())
@@ -626,6 +644,17 @@ class QuizApp(App):
         self.high_score_total = 0
         
         self.load_high_score()
+
+    def on_key(self, event: events.Key) -> None:
+        if isinstance(self.screen, TaskRadioScreen):
+            return
+
+        if event.key in ("down", "right"):
+            self.action_focus_next()
+        elif event.key in ("up", "left"):
+            self.action_focus_previous()
+        elif event.key == "enter" and isinstance(self.focused, Button):
+            self.focused.press()
 
     def load_high_score(self):
         if STATS_FILE.exists():

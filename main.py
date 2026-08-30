@@ -361,6 +361,7 @@ class TaskRadioScreen(Screen):
             ),
             Horizontal(
                 Button("Відповісти", id="btn_action", variant="success"),
+                Static(id="spacer"),
                 Button("Скинути (Reset)", id="btn_reset", variant="warning"),
                 Button("Назад", id="btn_back", name="back", variant="error"),
                 classes="action-buttons"
@@ -372,7 +373,6 @@ class TaskRadioScreen(Screen):
         radio_set = self.query_one(RadioSet)
         buttons = list(radio_set.query(RadioButton))
 
-        # Перевірка event.character на None запобігає виникненню TypeError
         if event.character and event.character in "1234567890":
             index = 9 if event.character == "0" else int(event.character) - 1
             if 0 <= index < len(buttons):
@@ -634,6 +634,10 @@ class QuizApp(App):
 
     .hard-grid .circle-btn {
         border: solid blue;
+    }
+
+    #spacer {
+        width: 1fr;
     }
     """
 
